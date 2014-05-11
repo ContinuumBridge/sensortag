@@ -64,11 +64,6 @@ class SimValues():
 class Adaptor(CbAdaptor):
     def __init__(self, argv):
         logging.basicConfig(filename=CB_LOGFILE,level=CB_LOGGING_LEVEL,format='%(asctime)s %(message)s')
-        #CbAdaptor methods processApp & cbAdtConfig MUST be subclassed
-        CbAdaptor.processApp = self.processApp
-        CbAdaptor.adaptorConfigure = self.configure
-        # Override stopAdaptor if you need to be told when to stop
-        CbAdaptor.stopAdaptor = self.stopAdaptor
         self.connected = False  # Indicates we are connected to SensorTag
         self.status = "ok"
         self.state = "stopped"
@@ -127,7 +122,7 @@ class Adaptor(CbAdaptor):
         #CbAdaprot.__init__ MUST be called
         CbAdaptor.__init__(self, argv)
 
-    def states(self, action):
+    def setState(self, action):
         if self.state == "stopped":
             if action == "connected":
                 self.state = "connected"
@@ -163,16 +158,16 @@ class Adaptor(CbAdaptor):
         msg = {"id": self.id,
                "status": "state",
                "state": external_state}
-        self.cbSendManagerMsg(msg)
+        self.sendManagerMessage(msg)
 
-    def stopAdaptor(self):
+    def onStop(self):
         # Mainly caters for situation where adaptor is told to stop while it is starting
         if self.connected:
             try:
                 self.gatt.kill(9)
-                logging.debug("%s %s %s stopAdaptor killed gatt", ModuleName, self.id, self.friendly_name)
+                logging.debug("%s %s %s onStop killed gatt", ModuleName, self.id, self.friendly_name)
             except:
-                logging.warning("%s %s %s stopAdaptor unable to kill gatt", ModuleName, self.id, self.friendly_name)
+                logging.warning("%s %s %s onStop unable to kill gatt", ModuleName, self.id, self.friendly_name)
 
     def initSensorTag(self):
         logging.info("%s %s %s Init", ModuleName, self.id, self.friendly_name)
@@ -206,7 +201,7 @@ class Adaptor(CbAdaptor):
             if a not in self.processedApps:
                 found = False
         if found:
-            self.states("inUse")
+            self.setState("inUse")
 
     def writeTag(self, handle, cmd):
         line = 'char-write-req ' + handle + cmd
@@ -283,7 +278,7 @@ class Adaptor(CbAdaptor):
                 logging.error("%s %s %s Failed to initialise", ModuleName, self.id, self.friendly_name)
         if not self.doStop:
             logging.info("%s %s %s Initialised", ModuleName, self.id, self.friendly_name)
-            self.states("connected")
+            self.setState("connected")
         else:
             return
  
@@ -347,7 +342,7 @@ class Adaptor(CbAdaptor):
         while not self.doStop:
             # If things appear to be going wrong, signal an error
             if self.badCount > 7:
-                self.states("error")
+                self.setState("error")
             if self.sim == 0:
                 index = self.gatt.expect(['handle.*', pexpect.TIMEOUT, pexpect.EOF], timeout=GATT_TIMEOUT)
             else:
@@ -395,7 +390,7 @@ class Adaptor(CbAdaptor):
                     break
             else:
                 if self.badCount > 7:
-                    self.states("reset_error")
+                    self.setState("reset_error")
                 self.badCount = 0  # Got a value so reset
                 if self.sim == 0:
                     raw = self.gatt.after.split()
@@ -460,7 +455,7 @@ class Adaptor(CbAdaptor):
                "data": accel,
                "timeStamp": time.time()}
         for a in self.accelApps:
-            reactor.callFromThread(self.cbSendMsg, msg, a)
+            reactor.callFromThread(self.sendMessage, msg, a)
 
     def sendHumidity(self, relHumidity):
         msg = {"id": self.id,
@@ -468,7 +463,7 @@ class Adaptor(CbAdaptor):
                "timeStamp": time.time(),
                "data": relHumidity}
         for a in self.humidApps:
-            reactor.callFromThread(self.cbSendMsg, msg, a)
+            reactor.callFromThread(self.sendMessage, msg, a)
 
     def sendTemp(self, ambT):
         msg = {"id": self.id,
@@ -476,7 +471,7 @@ class Adaptor(CbAdaptor):
                "content": "temperature",
                "data": ambT}
         for a in self.tempApps:
-            reactor.callFromThread(self.cbSendMsg, msg, a)
+            reactor.callFromThread(self.sendMessage, msg, a)
 
     def sendIrTemp(self, objT):
         msg = {"id": self.id,
@@ -484,7 +479,7 @@ class Adaptor(CbAdaptor):
                "content": "ir_temperature",
                "data": objT}
         for a in self.irTempApps:
-            reactor.callFromThread(self.cbSendMsg, msg, a)
+            reactor.callFromThread(self.sendMessage, msg, a)
 
     def sendButtons(self, buttons):
         msg = {"id": self.id,
@@ -492,7 +487,7 @@ class Adaptor(CbAdaptor):
                "content": "buttons",
                "data": buttons}
         for a in self.buttonApps:
-            reactor.callFromThread(self.cbSendMsg, msg, a)
+            reactor.callFromThread(self.sendMessage, msg, a)
 
     def sendGyro(self, gyro):
         msg = {"id": self.id,
@@ -500,7 +495,7 @@ class Adaptor(CbAdaptor):
                "data": gyro,
                "timeStamp": time.time()}
         for a in self.gyroApps:
-            reactor.callFromThread(self.cbSendMsg, msg, a)
+            reactor.callFromThread(self.sendMessage, msg, a)
 
     def sendMagnet(self, magnet):
         msg = {"id": self.id,
@@ -508,97 +503,99 @@ class Adaptor(CbAdaptor):
                "data": magnet,
                "timeStamp": time.time()}
         for a in self.magnetApps:
-            reactor.callFromThread(self.cbSendMsg, msg, a)
+            reactor.callFromThread(self.sendMessage, msg, a)
 
-    def processApp(self, req):
+    def onAppInit(self, message):
         """
         Processes requests from apps.
         Called in a thread and so it is OK if it blocks.
         Called separately for every app that can make requests.
         """
-        logging.debug("%s %s %s processApp, req = %s", ModuleName, self.id, self.friendly_name, req)
+        #logging.debug("%s %s %s onAppInit, message = %s", ModuleName, self.id, self.friendly_name, message)
         tagStatus = "ok"
-        if req["req"] == "init":
-            resp = {"name": self.name,
-                    "id": self.id,
-                    "status": tagStatus,
-                    "services": [{"parameter": "temperature",
-                                  "frequency": "1.0",
-                                  "purpose": "room"},
-                                 {"parameter": "ir_temperature",
-                                  "frequency": "1.0",
-                                  "purpose": "ir temperature"},
-                                 {"parameter": "acceleration",
-                                  "frequency": "3.0",
-                                  "purpose": "access door"},
-                                 {"parameter": "gyro",
-                                  "frequency": "1.0",
-                                  "range": "-250:+250 degrees",
-                                  "purpose": "gyro"},
-                                 {"parameter": "magnetometer",
-                                  "frequency": "1.0",
-                                  "range": "-1000:+1000 uT",
-                                  "purpose": "magnetometer"},
-                                 {"parameter": "rel_humidity",
-                                  "frequency": "1.0",
-                                  "purpose": "room"},
-                                 {"parameter": "buttons",
-                                  "frequency": "0",
-                                  "purpose": "user_defined"}],
-                    "content": "services"}
-            self.cbSendMsg(resp, req["id"])
-        elif req["req"] == "services":
-            # Apps may turn on or off services from time to time
+        resp = {"name": self.name,
+                "id": self.id,
+                "status": tagStatus,
+                "functions": [{"parameter": "temperature",
+                               "frequency": "1.0",
+                               "purpose": "room"},
+                              {"parameter": "ir_temperature",
+                               "frequency": "1.0",
+                               "purpose": "ir temperature"},
+                              {"parameter": "acceleration",
+                               "frequency": "3.0",
+                               "purpose": "access door"},
+                              {"parameter": "gyro",
+                               "frequency": "1.0",
+                               "range": "-250:+250 degrees",
+                               "purpose": "gyro"},
+                              {"parameter": "magnetometer",
+                               "frequency": "1.0",
+                               "range": "-1000:+1000 uT",
+                               "purpose": "magnetometer"},
+                              {"parameter": "rel_humidity",
+                               "frequency": "1.0",
+                               "purpose": "room"},
+                              {"parameter": "buttons",
+                               "frequency": "0",
+                               "purpose": "user_defined"}],
+                "content": "functions"}
+        self.sendMessage(resp, message["id"])
+
+    def onAppRequest(self, message):
+        #logging.debug("%s %s %s onAppRequest, message = %s", ModuleName, self.id, self.friendly_name, message)
+        if message["request"] == "functions":
+            # Apps may turn on or off functions from time to time
             # So it is necessary to be able to remove as well as append
             # Can't just destory the lists as they may be being used elsewhere
-            if req["id"] not in self.tempApps:
-                if "temperature" in req["services"]:
-                    self.tempApps.append(req["id"])  
+            if message["id"] not in self.tempApps:
+                if "temperature" in message["functions"]:
+                    self.tempApps.append(message["id"])  
             else:
-                if "temperature" not in req["services"]:
-                    self.tempApps.remove(req["id"])  
+                if "temperature" not in message["functions"]:
+                    self.tempApps.remove(message["id"])  
 
-            if req["id"] not in self.irTempApps:
-                if "ir_temperature" in req["services"]:
-                    self.irTempApps.append(req["id"])  
+            if message["id"] not in self.irTempApps:
+                if "ir_temperature" in message["functions"]:
+                    self.irTempApps.append(message["id"])  
             else:
-                if "ir_temperature" not in req["services"]:
-                    self.irTempApps.remove(req["id"])  
+                if "ir_temperature" not in message["functions"]:
+                    self.irTempApps.remove(message["id"])  
 
-            if req["id"] not in self.accelApps:
-                if "acceleration" in req["services"]:
-                    self.accelApps.append(req["id"])  
+            if message["id"] not in self.accelApps:
+                if "acceleration" in message["functions"]:
+                    self.accelApps.append(message["id"])  
             else:
-                if "acceleration" not in req["services"]:
-                    self.accelApps.remove(req["id"])  
+                if "acceleration" not in message["functions"]:
+                    self.accelApps.remove(message["id"])  
 
-            if req["id"] not in self.humidApps:
-                if "rel_humidity" in req["services"]:
-                    self.humidApps.append(req["id"])  
+            if message["id"] not in self.humidApps:
+                if "rel_humidity" in message["functions"]:
+                    self.humidApps.append(message["id"])  
             else:
-                if "rel_humidity" not in req["services"]:
-                    self.humidApps.remove(req["id"])  
+                if "rel_humidity" not in message["functions"]:
+                    self.humidApps.remove(message["id"])  
 
-            if req["id"] not in self.gyroApps:
-                if "gyro" in req["services"]:
-                    self.gyroApps.append(req["id"])  
+            if message["id"] not in self.gyroApps:
+                if "gyro" in message["functions"]:
+                    self.gyroApps.append(message["id"])  
             else:
-                if "gyro" not in req["services"]:
-                    self.gyroApps.remove(req["id"])  
+                if "gyro" not in message["functions"]:
+                    self.gyroApps.remove(message["id"])  
 
-            if req["id"] not in self.magnetApps:
-                if "magnetometer" in req["services"]:
-                    self.magnetApps.append(req["id"])  
+            if message["id"] not in self.magnetApps:
+                if "magnetometer" in message["functions"]:
+                    self.magnetApps.append(message["id"])  
             else:
-                if "magnetometer" not in req["services"]:
-                    self.magnetApps.remove(req["id"])  
+                if "magnetometer" not in message["functions"]:
+                    self.magnetApps.remove(message["id"])  
 
-            if req["id"] not in self.buttonApps:
-                if "buttons" in req["services"]:
-                    self.buttonApps.append(req["id"])  
+            if message["id"] not in self.buttonApps:
+                if "buttons" in message["functions"]:
+                    self.buttonApps.append(message["id"])  
             else:
-                if "buttons" not in req["services"]:
-                    self.buttonApps.remove(req["id"])  
+                if "buttons" not in message["functions"]:
+                    self.buttonApps.remove(message["id"])  
 
             logging.info("%s %s %s tempApps: %s", ModuleName, self.id, self.friendly_name, self.tempApps)
             logging.info("%s %s %s accelApps: %s", ModuleName, self.id, self.friendly_name, self.accelApps)
@@ -606,11 +603,11 @@ class Adaptor(CbAdaptor):
             logging.info("%s %s %s magnetApps: %s", ModuleName, self.id, self.friendly_name, self.magnetApps)
             logging.info("%s %s %s gyroApps: %s", ModuleName, self.id, self.friendly_name, self.gyroApps)
             logging.info("%s %s %s buttonApps: %s", ModuleName, self.id, self.friendly_name, self.buttonApps)
-            self.checkAllProcessed(req["id"])
+            self.checkAllProcessed(message["id"])
         else:
             pass
 
-    def configure(self, config):
+    def onConfigureMessage(self, config):
         """Config is based on what apps are to be connected.
             May be called again if there is a new configuration, which
             could be because a new app has been added.
