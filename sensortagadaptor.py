@@ -10,8 +10,9 @@ ModuleName = "SensorTag"
 EOF_MONITOR_INTERVAL = 1  # Interval over which to count EOFs from device (sec)
 MAX_EOF_COUNT = 2         # Max EOFs allowed in that interval
 INIT_TIMEOUT = 16         # Timeout when initialising SensorTag (sec)
-GATT_TIMEOUT = 3          # Timeout listening to SensorTag (sec)
+GATT_TIMEOUT = 60         # Timeout listening to SensorTag (sec)
 GATT_SLEEP_TIME = 2       # Time to sleep between killing one gatt process & starting another
+MAX_NOTIFY_INTERVAL = 5   # Above this value tag will be polled rather than asked to notify (sec)
 
 import pexpect
 import sys
@@ -68,17 +69,41 @@ class Adaptor(CbAdaptor):
         self.status = "ok"
         self.state = "stopped"
         self.badCount = 0       # Used to count errors on the BLE interface
+        self.notifyApps = {"temperature": [],
+                           "ir_temperature": [],
+                           "acceleration": [],
+                           "gyro": [],
+                           "magnetometer": [],
+                           "rel_humidity": [],
+                           "buttons": []}
+        self.pollApps =   {"temperature": [],
+                           "ir_temperature": [],
+                           "acceleration": [],
+                           "gyro": [],
+                           "magnetometer": [],
+                           "rel_humidity": [],
+                           "buttons": []}
+        self.pollInterval = {"temperature": 1000,
+                             "ir_temperature": 1000,
+                             "acceleration": 1000,
+                             "gyro": 1000,
+                             "magnetometer": 1000,
+                             "rel_humidity": 1000,
+                             "buttons": 1000}
+        self.pollTime =     {"temperature": 1000,
+                             "ir_temperature": 1000,
+                             "acceleration": 1000,
+                             "gyro": 1000,
+                             "magnetometer": 1000,
+                             "rel_humidity": 1000,
+                             "buttons": 1000}
         self.lastEOFTime = time.time()
-        self.tempApps = []
-        self.irTempApps = []
-        self.accelApps = []
-        self.humidApps = []
-        self.gyroApps = []
-        self.magnetApps = []
-        self.buttonApps = []
         self.processedApps = []
         
         # Parameters for communicating with the SensorTag
+        # Write 0 to turn off gyroscope, 1 to enable X axis only, 2 to
+        # enable Y axis only, 3 = X and Y, 4 = Z only, 5 = X and Z, 6 =
+        # Y and Z, 7 = X, Y and Z
         self.cmd = {"on": " 01",
                     "off": " 00",
                     "notify": " 0100",
@@ -93,24 +118,28 @@ class Adaptor(CbAdaptor):
                         "buttons": 0x69
                        }
         self.handles = {}
-        self.handles["temp"] =  {"en": str(hex(self.primary["temp"] + 6)), 
-                                 "notify": str(hex(self.primary["temp"] + 3)),
-                                 "data": str(format(self.primary["temp"] + 2, "#06x"))
-                                }
-        self.handles["accel"] = {"en": str(hex(self.primary["accel"] + 6)), 
-                                 "notify": str(hex(self.primary["accel"] + 3)),
-                                 "period": str(hex(self.primary["accel"] + 9)), 
-                                 "data": str(format(self.primary["accel"] + 2, "#06x"))
-                                }
-        self.handles["humid"] = {"en": str(hex(self.primary["humid"] + 6)), 
-                                "notify": str(hex(self.primary["humid"] + 3)),
-                                "data": str(format(self.primary["humid"] + 2, "#06x"))
-                                }
-        self.handles["magnet"] = {"en": str(hex(self.primary["magnet"] + 6)), 
-                                 "notify": str(hex(self.primary["magnet"] + 3)),
-                                 "period": str(hex(self.primary["magnet"] + 9)), 
-                                 "data": str(format(self.primary["magnet"] + 2, "#06x"))
-                                }
+        self.handles["temperature"] =  {"en": str(hex(self.primary["temp"] + 6)), 
+                                        "notify": str(hex(self.primary["temp"] + 3)),
+                                        "data": str(format(self.primary["temp"] + 2, "#06x"))
+                                       }
+        self.handles["acceleration"] = {"en": str(hex(self.primary["accel"] + 6)), 
+                                       "notify": str(hex(self.primary["accel"] + 3)),
+                                       "period": str(hex(self.primary["accel"] + 9)), 
+                                       # Period = 0x34 value x 10 ms (thought to be 0x0a)
+                                       # Was running with 0x0A = 100 ms, now 0x22 = 500 ms
+                                       "period_value": " 22", 
+                                       "data": str(format(self.primary["accel"] + 2, "#06x"))
+                                       }
+        self.handles["rel_humidity"] = {"en": str(hex(self.primary["humid"] + 6)), 
+                                       "notify": str(hex(self.primary["humid"] + 3)),
+                                       "data": str(format(self.primary["humid"] + 2, "#06x"))
+                                       }
+        self.handles["magnetometer"] = {"en": str(hex(self.primary["magnet"] + 6)), 
+                                        "notify": str(hex(self.primary["magnet"] + 3)),
+                                        "period": str(hex(self.primary["magnet"] + 9)), 
+                                        "period_value": " 66", 
+                                        "data": str(format(self.primary["magnet"] + 2, "#06x"))
+                                       }
         self.handles["gyro"] =  {"en": str(hex(self.primary["gyro"] + 6)), 
                                  "notify": str(hex(self.primary["gyro"] + 3)),
                                  "data": str(format(self.primary["gyro"] + 2, "#06x"))
@@ -135,15 +164,27 @@ class Adaptor(CbAdaptor):
             if action == "connected":
                 self.state = "activate"
         if self.state == "activate":
-            if not(self.accelApps or self.tempApps or self.irTemoApps or self.humidApps \
-                    or self.gyroAoos or self.buttonApps or self.magnetApps):
-                # No sensors are being used
-                logging.info("%s %s No sensors being used. Tag not enabled", ModuleName, self.id)
+            notifying = False
+            for a in self.notifyApps:
+                if self.notifyApps[a]:
+                    notifying = True
+                    break
+            if not notifying:
+                logging.info("%s %s No sensors requested in notify mode", ModuleName, self.id)
             elif self.sim == 0:
                 logging.debug("%s %s Activating", ModuleName, self.id)
                 status = self.switchSensors()
                 logging.info("%s %s %s switchSensors status: %s", ModuleName, self.id, self.friendly_name, status)
-                reactor.callInThread(self.getValues)
+            reactor.callInThread(self.getValues)
+            pollApps = False
+            for a in self.pollApps:
+                if self.pollApps[a]:
+                    polling = True
+                    break
+            if not polling:
+                logging.info("%s %s No sensors requested in polling  mode", ModuleName, self.id)
+            else:
+                reactor.callLater(0, self.pollTag)
             self.state = "running"
         # error is only ever set from the running state, so set back to running if error is cleared
         if action == "error":
@@ -204,6 +245,7 @@ class Adaptor(CbAdaptor):
             self.setState("inUse")
 
     def writeTag(self, handle, cmd):
+        # Write a command to the tag and checks it has been received
         line = 'char-write-req ' + handle + cmd
         logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
         self.gatt.sendline(line)
@@ -212,54 +254,55 @@ class Adaptor(CbAdaptor):
             logging.debug("%s char-write-req failed. index =  %s", ModuleName, index)
             self.tagOK = "not ok"
 
+    def writeTagNoCheck(self, handle, cmd):
+        # Writes a command to the tag without checking if it has been received
+        # Used to write after the tag is returning values
+        line = 'char-write-cmd ' + handle + cmd
+        logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
+        self.gatt.sendline(line)
+
+    def readTag(self, handle):
+        line = 'char-read-hnd ' + handle
+        logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
+        self.gatt.sendline(line)
+        # The value read is caught by getValues
+
     def switchSensors(self):
         """ Call whenever an app updates its sensor configuration. Turns
             individual sensors in the Tag on or off.
         """
         self.tagOK = "ok"
-        if self.accelApps:
-            self.writeTag(self.handles["accel"]["en"], self.cmd["on"])
-            self.writeTag(self.handles["accel"]["notify"], self.cmd["notify"])
-            # Period = 0x34 value x 10 ms (thought to be 0x0a)
-            # Was running with 0x0A = 100 ms, now 0x22 = 500 ms
-            self.writeTag(self.handles["accel"]["period"], ' 22')
-        else:
-            self.writeTag(self.handles["accel"]["en"], self.cmd["off"])
-
-        if self.tempApps or self.irTempApps:
-            self.writeTag(self.handles["temp"]["en"], self.cmd["on"])
-            self.writeTag(self.handles["temp"]["notify"], self.cmd["notify"])
-        else:
-            self.writeTag(self.handles["temp"]["en"], self.cmd["off"])
-
-        if self.humidApps:
-            self.writeTag(self.handles["humid"]["en"], self.cmd["on"])
-            self.writeTag(self.handles["humid"]["notify"], self.cmd["notify"])
-        else:
-            self.writeTag(self.handles["humid"]["en"], self.cmd["off"])
- 
-        if self.gyroApps:
-            # Write 0 to turn off gyroscope, 1 to enable X axis only, 2 to
-            # enable Y axis only, 3 = X and Y, 4 = Z only, 5 = X and Z, 6 =
-            # Y and Z, 7 = X, Y and Z
-            self.writeTag(self.handles["gyro"]["en"], self.cmd["gyro_on"])
-            self.writeTag(self.handles["gyro"]["notify"], self.cmd["notify"])
-        else:
-            self.writeTag(self.handles["gyro"]["en"], self.cmd["off"])
-
-        if self.magnetApps:
-            self.writeTag(self.handles["magnet"]["en"], self.cmd["on"])
-            self.writeTag(self.handles["magnet"]["notify"], self.cmd["notify"])
-            # Change to notification from default 2s
-            self.writeTag(self.handles["magnet"]["period"], ' 66')
-        else:
-            self.writeTag(self.handles["magnet"]["en"], self.cmd["off"])
-
-        if self.buttonApps:
-            self.writeTag(self.handles["buttons"]["notify"], self.cmd["notify"])
-        else:
-            self.writeTag(self.handles["buttons"]["notify"], self.cmd["stop_notify"])
+        for a in self.notifyApps:
+            if a != "ir_temperature":
+                if self.notifyApps[a]:
+                    if "en" in self.handles[a]:
+                        self.writeTag(self.handles[a]["en"], self.cmd["on"])
+                    if "notify" in self.handles[a]:
+                        self.writeTag(self.handles[a]["notify"], self.cmd["notify"])
+                    if "period" in self.handles[a]:
+                        self.writeTag(self.handles[a]["period"], self.handles[a]["period_value"])
+                else:
+                    if "en" in self.handles[a]:
+                        self.writeTag(self.handles[a]["en"], self.cmd["off"])
         return self.tagOK
+
+    def pollTag(self):
+        for a in self.pollApps:
+            if self.pollApps[a]:
+                if time.time() > self.pollTime[a]:
+                    reactor.callLater(0, self.switchSensorOn, a)
+                    self.pollTime[a] = time.time() + self.pollInterval[a]
+        reactor.callLater(1, self.pollTag)
+
+    def switchSensorOn(self, sensor):
+        logging.debug("%s %s %s swtichSensorOn: %s", ModuleName, self.id, self.friendly_name, sensor)
+        self.writeTagNoCheck(self.handles[sensor]["en"], self.cmd["on"])
+        # Leave for 1 second, then read
+        reactor.callLater(1, self.readSensor, sensor)
+
+    def readSensor(self, sensor):
+        self.readTag(self.handles[sensor]["data"])
+        self.writeTagNoCheck(self.handles[sensor]["en"], self.cmd["off"])
 
     def connectSensorTag(self):
         """
@@ -396,42 +439,43 @@ class Adaptor(CbAdaptor):
                     raw = self.gatt.after.split()
                 else:
                     raw = self.simValues.getSimValues()
+                timeStamp = time.time()
                 handles = True
                 startI = 2
                 while handles:
                     type = raw[startI]
-                    if type.startswith(self.handles["accel"]["data"]): 
+                    if type.startswith(self.handles["acceleration"]["data"]): 
                         # Accelerometer descriptor
                         accel = {}
                         accel["x"] = self.s8tofloat(raw[startI+2])/63
                         accel["y"] = self.s8tofloat(raw[startI+3])/63
                         accel["z"] = self.s8tofloat(raw[startI+4])/63
-                        self.sendAccel(accel)
+                        self.sendParameter("acceleration", accel, timeStamp)
                     elif type.startswith(self.handles["buttons"]["data"]):
                         # Button press decriptor
                         buttons = {"leftButton": (int(raw[startI+2]) & 2) >> 1,
                                    "rightButton": int(raw[startI+2]) & 1}
-                        self.sendButtons(buttons)
-                    elif type.startswith(self.handles["temp"]["data"]):
+                        self.sendParameter("buttons", buttons, timeStamp)
+                    elif type.startswith(self.handles["temperature"]["data"]):
                         # Temperature descriptor
                         objT, ambT = self.calcTemperature(raw[startI+2:startI+6])
-                        self.sendTemp(ambT)
-                        self.sendIrTemp(objT)
-                    elif type.startswith(self.handles["humid"]["data"]):
+                        self.sendParameter("temperature", ambT, timeStamp)
+                        self.sendParameter("ir_temperature", objT, timeStamp)
+                    elif type.startswith(self.handles["rel_humidity"]["data"]):
                         relHumidity = self.calcHumidity(raw[startI+2:startI+6])
-                        self.sendHumidity(relHumidity)
+                        self.sendParameter("rel_humidity", relHumidity, timeStamp)
                     elif type.startswith("0x0057"):
                         gyro = {}
                         gyro["x"] = self.calcGyro(raw[startI+2:startI+4])
                         gyro["y"] = self.calcGyro(raw[startI+4:startI+6])
                         gyro["z"] = self.calcGyro(raw[startI+6:startI+8])
-                        self.sendGyro(gyro)
+                        self.sendParameter("gyro", gyro, timeStamp)
                     elif type.startswith("0x0040"):
                         mag = {}
                         mag["x"] = self.calcMag(raw[startI+2:startI+4])
                         mag["y"] = self.calcMag(raw[startI+4:startI+6])
                         mag["z"] = self.calcMag(raw[startI+6:startI+8])
-                        self.sendMagnet(mag)
+                        self.sendParameter("magnetometer", mag, timeStamp)
                     else:
                        pass
                     # There may be more than one handle in raw. Remove the
@@ -449,60 +493,14 @@ class Adaptor(CbAdaptor):
         except:
             logging.error("%s %s %s Could not kill gatt process", ModuleName, self.id, self.friendly_name)
 
-    def sendAccel(self, accel):
+    def sendParameter(self, parameter, data, timeStamp):
         msg = {"id": self.id,
-               "content": "acceleration",
-               "data": accel,
-               "timeStamp": time.time()}
-        for a in self.accelApps:
+               "content": parameter,
+               "data": data,
+               "timeStamp": timeStamp}
+        for a in self.notifyApps[parameter]:
             reactor.callFromThread(self.sendMessage, msg, a)
-
-    def sendHumidity(self, relHumidity):
-        msg = {"id": self.id,
-               "content": "rel_humidity",
-               "timeStamp": time.time(),
-               "data": relHumidity}
-        for a in self.humidApps:
-            reactor.callFromThread(self.sendMessage, msg, a)
-
-    def sendTemp(self, ambT):
-        msg = {"id": self.id,
-               "timeStamp": time.time(),
-               "content": "temperature",
-               "data": ambT}
-        for a in self.tempApps:
-            reactor.callFromThread(self.sendMessage, msg, a)
-
-    def sendIrTemp(self, objT):
-        msg = {"id": self.id,
-               "timeStamp": time.time(),
-               "content": "ir_temperature",
-               "data": objT}
-        for a in self.irTempApps:
-            reactor.callFromThread(self.sendMessage, msg, a)
-
-    def sendButtons(self, buttons):
-        msg = {"id": self.id,
-               "timeStamp": time.time(),
-               "content": "buttons",
-               "data": buttons}
-        for a in self.buttonApps:
-            reactor.callFromThread(self.sendMessage, msg, a)
-
-    def sendGyro(self, gyro):
-        msg = {"id": self.id,
-               "content": "gyro",
-               "data": gyro,
-               "timeStamp": time.time()}
-        for a in self.gyroApps:
-            reactor.callFromThread(self.sendMessage, msg, a)
-
-    def sendMagnet(self, magnet):
-        msg = {"id": self.id,
-               "content": "magnetometer",
-               "data": magnet,
-               "timeStamp": time.time()}
-        for a in self.magnetApps:
+        for a in self.pollApps[parameter]:
             reactor.callFromThread(self.sendMessage, msg, a)
 
     def onAppInit(self, message):
@@ -517,95 +515,53 @@ class Adaptor(CbAdaptor):
                 "id": self.id,
                 "status": tagStatus,
                 "functions": [{"parameter": "temperature",
-                               "frequency": "1.0",
+                               "interval": "1.0",
                                "purpose": "room"},
                               {"parameter": "ir_temperature",
-                               "frequency": "1.0",
+                               "interval": "1.0",
                                "purpose": "ir temperature"},
                               {"parameter": "acceleration",
-                               "frequency": "3.0",
+                               "interval": "3.0",
                                "purpose": "access door"},
                               {"parameter": "gyro",
-                               "frequency": "1.0",
+                               "interval": "1.0",
                                "range": "-250:+250 degrees",
                                "purpose": "gyro"},
                               {"parameter": "magnetometer",
-                               "frequency": "1.0",
+                               "interval": "1.0",
                                "range": "-1000:+1000 uT",
                                "purpose": "magnetometer"},
                               {"parameter": "rel_humidity",
-                               "frequency": "1.0",
+                               "interval": "1.0",
                                "purpose": "room"},
                               {"parameter": "buttons",
-                               "frequency": "0",
+                               "interval": "0",
                                "purpose": "user_defined"}],
                 "content": "functions"}
         self.sendMessage(resp, message["id"])
-
+        
     def onAppRequest(self, message):
-        #logging.debug("%s %s %s onAppRequest, message = %s", ModuleName, self.id, self.friendly_name, message)
-        if message["request"] == "functions":
-            # Apps may turn on or off functions from time to time
-            # So it is necessary to be able to remove as well as append
-            # Can't just destory the lists as they may be being used elsewhere
-            if message["id"] not in self.tempApps:
-                if "temperature" in message["functions"]:
-                    self.tempApps.append(message["id"])  
+        logging.debug("%s %s %s onAppRequest, message = %s", ModuleName, self.id, self.friendly_name, message)
+        # Switch off anything that already exists for this app
+        for a in self.notifyApps:
+            if message["id"] in self.notifyApps[a]:
+                self.notifyApps[a].remove(message["id"])
+        for a in self.pollApps:
+            if message["id"] in self.pollApps[a]:
+                self.pollApps[a].remove(message["id"])
+        # Now update details based on the message
+        for f in message["functions"]:
+            if f["interval"] < MAX_NOTIFY_INTERVAL:
+                if message["id"] not in self.notifyApps[f["parameter"]]:
+                    self.notifyApps[f["parameter"]].append(message["id"])
             else:
-                if "temperature" not in message["functions"]:
-                    self.tempApps.remove(message["id"])  
-
-            if message["id"] not in self.irTempApps:
-                if "ir_temperature" in message["functions"]:
-                    self.irTempApps.append(message["id"])  
-            else:
-                if "ir_temperature" not in message["functions"]:
-                    self.irTempApps.remove(message["id"])  
-
-            if message["id"] not in self.accelApps:
-                if "acceleration" in message["functions"]:
-                    self.accelApps.append(message["id"])  
-            else:
-                if "acceleration" not in message["functions"]:
-                    self.accelApps.remove(message["id"])  
-
-            if message["id"] not in self.humidApps:
-                if "rel_humidity" in message["functions"]:
-                    self.humidApps.append(message["id"])  
-            else:
-                if "rel_humidity" not in message["functions"]:
-                    self.humidApps.remove(message["id"])  
-
-            if message["id"] not in self.gyroApps:
-                if "gyro" in message["functions"]:
-                    self.gyroApps.append(message["id"])  
-            else:
-                if "gyro" not in message["functions"]:
-                    self.gyroApps.remove(message["id"])  
-
-            if message["id"] not in self.magnetApps:
-                if "magnetometer" in message["functions"]:
-                    self.magnetApps.append(message["id"])  
-            else:
-                if "magnetometer" not in message["functions"]:
-                    self.magnetApps.remove(message["id"])  
-
-            if message["id"] not in self.buttonApps:
-                if "buttons" in message["functions"]:
-                    self.buttonApps.append(message["id"])  
-            else:
-                if "buttons" not in message["functions"]:
-                    self.buttonApps.remove(message["id"])  
-
-            logging.info("%s %s %s tempApps: %s", ModuleName, self.id, self.friendly_name, self.tempApps)
-            logging.info("%s %s %s accelApps: %s", ModuleName, self.id, self.friendly_name, self.accelApps)
-            logging.info("%s %s %s humidApps: %s", ModuleName, self.id, self.friendly_name, self.humidApps)
-            logging.info("%s %s %s magnetApps: %s", ModuleName, self.id, self.friendly_name, self.magnetApps)
-            logging.info("%s %s %s gyroApps: %s", ModuleName, self.id, self.friendly_name, self.gyroApps)
-            logging.info("%s %s %s buttonApps: %s", ModuleName, self.id, self.friendly_name, self.buttonApps)
-            self.checkAllProcessed(message["id"])
-        else:
-            pass
+                if message["id"] not in self.pollApps[f["parameter"]]:
+                    self.pollApps[f["parameter"]].append(message["id"])
+                    if f["interval"] < self.pollInterval[f["parameter"]]:
+                        self.pollInterval[f["parameter"]] = f["interval"]
+        logging.info("%s %s %s notifyApps: %s", ModuleName, self.id, self.friendly_name, str(self.notifyApps))
+        logging.info("%s %s %s pollApps: %s", ModuleName, self.id, self.friendly_name, str(self.pollApps))
+        self.checkAllProcessed(message["id"])
 
     def onConfigureMessage(self, config):
         """Config is based on what apps are to be connected.
