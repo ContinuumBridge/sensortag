@@ -90,13 +90,14 @@ class Adaptor(CbAdaptor):
                              "magnetometer": 1000,
                              "rel_humidity": 1000,
                              "buttons": 1000}
-        self.pollTime =     {"temperature": 1000,
-                             "ir_temperature": 1000,
-                             "acceleration": 1000,
-                             "gyro": 1000,
-                             "magnetometer": 1000,
-                             "rel_humidity": 1000,
-                             "buttons": 1000}
+        self.pollTime =     {"temperature": 0,
+                             "ir_temperature": 0,
+                             "acceleration": 0,
+                             "gyro": 0,
+                             "magnetometer": 0,
+                             "rel_humidity": 0,
+                             "buttons": 0}
+        self.activePolls = []
         self.lastEOFTime = time.time()
         self.processedApps = []
         
@@ -247,7 +248,7 @@ class Adaptor(CbAdaptor):
     def writeTag(self, handle, cmd):
         # Write a command to the tag and checks it has been received
         line = 'char-write-req ' + handle + cmd
-        logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
+        #logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
         self.gatt.sendline(line)
         index = self.gatt.expect(['successfully', pexpect.TIMEOUT, pexpect.EOF], timeout=1)
         if index == 1 or index == 2:
@@ -258,12 +259,12 @@ class Adaptor(CbAdaptor):
         # Writes a command to the tag without checking if it has been received
         # Used to write after the tag is returning values
         line = 'char-write-cmd ' + handle + cmd
-        logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
+        #logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
         self.gatt.sendline(line)
 
     def readTag(self, handle):
         line = 'char-read-hnd ' + handle
-        logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
+        #logging.debug("%s %s %s gatt cmd: %s", ModuleName, self.id, self.friendly_name, line)
         self.gatt.sendline(line)
         # The value read is caught by getValues
 
@@ -295,14 +296,19 @@ class Adaptor(CbAdaptor):
         reactor.callLater(1, self.pollTag)
 
     def switchSensorOn(self, sensor):
-        logging.debug("%s %s %s swtichSensorOn: %s", ModuleName, self.id, self.friendly_name, sensor)
+        #logging.debug("%s %s %s swtichSensorOn: %s", ModuleName, self.id, self.friendly_name, sensor)
         self.writeTagNoCheck(self.handles[sensor]["en"], self.cmd["on"])
-        # Leave for 1 second, then read
-        reactor.callLater(1, self.readSensor, sensor)
+        self.writeTagNoCheck(self.handles[sensor]["notify"], self.cmd["notify"])
+        if sensor not in self.activePolls:
+            self.activePolls.append(sensor)
 
-    def readSensor(self, sensor):
-        self.readTag(self.handles[sensor]["data"])
-        self.writeTagNoCheck(self.handles[sensor]["en"], self.cmd["off"])
+    def sensorRead(self, sensor):
+        #logging.debug("%s %s %s sensorRead: %s", ModuleName, self.id, self.friendly_name, sensor)
+        if sensor in self.activePolls:
+            self.activePolls.remove(sensor)
+        if sensor in self.pollApps:
+            self.writeTagNoCheck(self.handles[sensor]["notify"], self.cmd["stop_notify"])
+            self.writeTagNoCheck(self.handles[sensor]["en"], self.cmd["off"])
 
     def connectSensorTag(self):
         """
@@ -444,6 +450,7 @@ class Adaptor(CbAdaptor):
                 startI = 2
                 while handles:
                     type = raw[startI]
+                    #logging.debug("%s %s %s getValues type: %s", ModuleName, self.id, self.friendly_name, type)
                     if type.startswith(self.handles["acceleration"]["data"]): 
                         # Accelerometer descriptor
                         accel = {}
@@ -501,6 +508,7 @@ class Adaptor(CbAdaptor):
         for a in self.notifyApps[parameter]:
             reactor.callFromThread(self.sendMessage, msg, a)
         for a in self.pollApps[parameter]:
+            reactor.callFromThread(self.sensorRead, parameter)
             reactor.callFromThread(self.sendMessage, msg, a)
 
     def onAppInit(self, message):
