@@ -177,7 +177,7 @@ class Adaptor(CbAdaptor):
                 status = self.switchSensors()
                 logging.info("%s %s %s switchSensors status: %s", ModuleName, self.id, self.friendly_name, status)
             reactor.callInThread(self.getValues)
-            pollApps = False
+            polling = False
             for a in self.pollApps:
                 if self.pollApps[a]:
                     polling = True
@@ -477,7 +477,7 @@ class Adaptor(CbAdaptor):
                         gyro["y"] = self.calcGyro(raw[startI+4:startI+6])
                         gyro["z"] = self.calcGyro(raw[startI+6:startI+8])
                         self.sendParameter("gyro", gyro, timeStamp)
-                    elif type.startswith("0x0040"):
+                    elif type.startswith(self.handles["magnetometer"]["data"]):
                         mag = {}
                         mag["x"] = self.calcMag(raw[startI+2:startI+4])
                         mag["y"] = self.calcMag(raw[startI+4:startI+6])
