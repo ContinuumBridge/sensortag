@@ -74,28 +74,28 @@ class Adaptor(CbAdaptor):
                            "acceleration": [],
                            "gyro": [],
                            "magnetometer": [],
-                           "rel_humidity": [],
+                           "humidity": [],
                            "buttons": []}
         self.pollApps =   {"temperature": [],
                            "ir_temperature": [],
                            "acceleration": [],
                            "gyro": [],
                            "magnetometer": [],
-                           "rel_humidity": [],
+                           "humidity": [],
                            "buttons": []}
         self.pollInterval = {"temperature": 1000,
                              "ir_temperature": 1000,
                              "acceleration": 1000,
                              "gyro": 1000,
                              "magnetometer": 1000,
-                             "rel_humidity": 1000,
+                             "humidity": 1000,
                              "buttons": 1000}
         self.pollTime =     {"temperature": 0,
                              "ir_temperature": 0,
                              "acceleration": 0,
                              "gyro": 0,
                              "magnetometer": 0,
-                             "rel_humidity": 0,
+                             "humidity": 0,
                              "buttons": 0}
         self.activePolls = []
         self.lastEOFTime = time.time()
@@ -131,7 +131,7 @@ class Adaptor(CbAdaptor):
                                        "period_value": " 22", 
                                        "data": str(format(self.primary["accel"] + 2, "#06x"))
                                        }
-        self.handles["rel_humidity"] = {"en": str(hex(self.primary["humid"] + 6)), 
+        self.handles["humidity"] = {"en": str(hex(self.primary["humid"] + 6)), 
                                        "notify": str(hex(self.primary["humid"] + 3)),
                                        "data": str(format(self.primary["humid"] + 2, "#06x"))
                                        }
@@ -468,9 +468,9 @@ class Adaptor(CbAdaptor):
                         objT, ambT = self.calcTemperature(raw[startI+2:startI+6])
                         self.sendParameter("temperature", ambT, timeStamp)
                         self.sendParameter("ir_temperature", objT, timeStamp)
-                    elif type.startswith(self.handles["rel_humidity"]["data"]):
+                    elif type.startswith(self.handles["humidity"]["data"]):
                         relHumidity = self.calcHumidity(raw[startI+2:startI+6])
-                        self.sendParameter("rel_humidity", relHumidity, timeStamp)
+                        self.sendParameter("humidity", relHumidity, timeStamp)
                     elif type.startswith("0x0057"):
                         gyro = {}
                         gyro["x"] = self.calcGyro(raw[startI+2:startI+4])
@@ -539,7 +539,7 @@ class Adaptor(CbAdaptor):
                                "interval": "1.0",
                                "range": "-1000:+1000 uT",
                                "purpose": "magnetometer"},
-                              {"parameter": "rel_humidity",
+                              {"parameter": "humidity",
                                "interval": "1.0",
                                "purpose": "room"},
                               {"parameter": "buttons",
