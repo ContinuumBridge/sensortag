@@ -12,7 +12,7 @@ MAX_EOF_COUNT = 2         # Max EOFs allowed in that interval
 INIT_TIMEOUT = 16         # Timeout when initialising SensorTag (sec)
 GATT_TIMEOUT = 60         # Timeout listening to SensorTag (sec)
 GATT_SLEEP_TIME = 2       # Time to sleep between killing one gatt process & starting another
-MAX_NOTIFY_INTERVAL = 5   # Above this value tag will be polled rather than asked to notify (sec)
+MAX_NOTIFY_INTERVAL = 2.5 #Above this value tag will be polled rather than asked to notify (sec)
 
 import pexpect
 import sys
