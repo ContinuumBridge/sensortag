@@ -6,7 +6,7 @@
 # Written by Peter Claydon
 #
 ModuleName = "SensorTag"
-# 2 lines below set parameters to monitor gatttool & kill thread if it has disappeared
+# 2 lines below set characteristics to monitor gatttool & kill thread if it has disappeared
 EOF_MONITOR_INTERVAL = 1  # Interval over which to count EOFs from device (sec)
 MAX_EOF_COUNT = 2         # Max EOFs allowed in that interval
 INIT_TIMEOUT = 16         # Timeout when initialising SensorTag (sec)
@@ -101,7 +101,7 @@ class Adaptor(CbAdaptor):
         self.lastEOFTime = time.time()
         self.processedApps = []
         
-        # Parameters for communicating with the SensorTag
+        # characteristics for communicating with the SensorTag
         # Write 0 to turn off gyroscope, 1 to enable X axis only, 2 to
         # enable Y axis only, 3 = X and Y, 4 = Z only, 5 = X and Z, 6 =
         # Y and Z, 7 = X, Y and Z
@@ -457,32 +457,32 @@ class Adaptor(CbAdaptor):
                         accel["x"] = self.s8tofloat(raw[startI+2])/63
                         accel["y"] = self.s8tofloat(raw[startI+3])/63
                         accel["z"] = self.s8tofloat(raw[startI+4])/63
-                        self.sendParameter("acceleration", accel, timeStamp)
+                        self.sendcharacteristic("acceleration", accel, timeStamp)
                     elif type.startswith(self.handles["buttons"]["data"]):
                         # Button press decriptor
                         buttons = {"leftButton": (int(raw[startI+2]) & 2) >> 1,
                                    "rightButton": int(raw[startI+2]) & 1}
-                        self.sendParameter("buttons", buttons, timeStamp)
+                        self.sendcharacteristic("buttons", buttons, timeStamp)
                     elif type.startswith(self.handles["temperature"]["data"]):
                         # Temperature descriptor
                         objT, ambT = self.calcTemperature(raw[startI+2:startI+6])
-                        self.sendParameter("temperature", ambT, timeStamp)
-                        self.sendParameter("ir_temperature", objT, timeStamp)
+                        self.sendcharacteristic("temperature", ambT, timeStamp)
+                        self.sendcharacteristic("ir_temperature", objT, timeStamp)
                     elif type.startswith(self.handles["humidity"]["data"]):
                         relHumidity = self.calcHumidity(raw[startI+2:startI+6])
-                        self.sendParameter("humidity", relHumidity, timeStamp)
+                        self.sendcharacteristic("humidity", relHumidity, timeStamp)
                     elif type.startswith("0x0057"):
                         gyro = {}
                         gyro["x"] = self.calcGyro(raw[startI+2:startI+4])
                         gyro["y"] = self.calcGyro(raw[startI+4:startI+6])
                         gyro["z"] = self.calcGyro(raw[startI+6:startI+8])
-                        self.sendParameter("gyro", gyro, timeStamp)
+                        self.sendcharacteristic("gyro", gyro, timeStamp)
                     elif type.startswith(self.handles["magnetometer"]["data"]):
                         mag = {}
                         mag["x"] = self.calcMag(raw[startI+2:startI+4])
                         mag["y"] = self.calcMag(raw[startI+4:startI+6])
                         mag["z"] = self.calcMag(raw[startI+6:startI+8])
-                        self.sendParameter("magnetometer", mag, timeStamp)
+                        self.sendcharacteristic("magnetometer", mag, timeStamp)
                     else:
                        pass
                     # There may be more than one handle in raw. Remove the
@@ -500,15 +500,16 @@ class Adaptor(CbAdaptor):
         except:
             logging.error("%s %s %s Could not kill gatt process", ModuleName, self.id, self.friendly_name)
 
-    def sendParameter(self, parameter, data, timeStamp):
+    def sendcharacteristic(self, characteristic, data, timeStamp):
         msg = {"id": self.id,
-               "content": parameter,
+               "content": "characteristic",
+               "characteristic": characteristic,
                "data": data,
                "timeStamp": timeStamp}
-        for a in self.notifyApps[parameter]:
+        for a in self.notifyApps[characteristic]:
             reactor.callFromThread(self.sendMessage, msg, a)
-        for a in self.pollApps[parameter]:
-            reactor.callFromThread(self.sensorRead, parameter)
+        for a in self.pollApps[characteristic]:
+            reactor.callFromThread(self.sensorRead, characteristic)
             reactor.callFromThread(self.sendMessage, msg, a)
 
     def onAppInit(self, message):
@@ -522,30 +523,21 @@ class Adaptor(CbAdaptor):
         resp = {"name": self.name,
                 "id": self.id,
                 "status": tagStatus,
-                "functions": [{"parameter": "temperature",
-                               "interval": "1.0",
-                               "purpose": "room"},
-                              {"parameter": "ir_temperature",
-                               "interval": "1.0",
-                               "purpose": "ir temperature"},
-                              {"parameter": "acceleration",
-                               "interval": "3.0",
-                               "purpose": "access door"},
-                              {"parameter": "gyro",
-                               "interval": "1.0",
-                               "range": "-250:+250 degrees",
-                               "purpose": "gyro"},
-                              {"parameter": "magnetometer",
-                               "interval": "1.0",
-                               "range": "-1000:+1000 uT",
-                               "purpose": "magnetometer"},
-                              {"parameter": "humidity",
-                               "interval": "1.0",
-                               "purpose": "room"},
-                              {"parameter": "buttons",
-                               "interval": "0",
-                               "purpose": "user_defined"}],
-                "content": "functions"}
+                "service": [{"characteristic": "temperature",
+                             "interval": 1.0},
+                            {"characteristic": "ir_temperature",
+                             "interval": 1.0},
+                            {"characteristic": "acceleration",
+                             "interval": 3.0},
+                            {"characteristic": "gyro",
+                             "interval": 1.0},
+                            {"characteristic": "magnetometer",
+                             "interval": 1.0},
+                            {"characteristic": "humidity",
+                             "interval": 1.0},
+                            {"characteristic": "buttons",
+                             "interval": 0}],
+                "content": "service"}
         self.sendMessage(resp, message["id"])
         
     def onAppRequest(self, message):
@@ -558,15 +550,15 @@ class Adaptor(CbAdaptor):
             if message["id"] in self.pollApps[a]:
                 self.pollApps[a].remove(message["id"])
         # Now update details based on the message
-        for f in message["functions"]:
+        for f in message["service"]:
             if f["interval"] < MAX_NOTIFY_INTERVAL:
-                if message["id"] not in self.notifyApps[f["parameter"]]:
-                    self.notifyApps[f["parameter"]].append(message["id"])
+                if message["id"] not in self.notifyApps[f["characteristic"]]:
+                    self.notifyApps[f["characteristic"]].append(message["id"])
             else:
-                if message["id"] not in self.pollApps[f["parameter"]]:
-                    self.pollApps[f["parameter"]].append(message["id"])
-                    if f["interval"] < self.pollInterval[f["parameter"]]:
-                        self.pollInterval[f["parameter"]] = f["interval"]
+                if message["id"] not in self.pollApps[f["characteristic"]]:
+                    self.pollApps[f["characteristic"]].append(message["id"])
+                    if f["interval"] < self.pollInterval[f["characteristic"]]:
+                        self.pollInterval[f["characteristic"]] = f["interval"]
         logging.info("%s %s %s notifyApps: %s", ModuleName, self.id, self.friendly_name, str(self.notifyApps))
         logging.info("%s %s %s pollApps: %s", ModuleName, self.id, self.friendly_name, str(self.pollApps))
         self.checkAllProcessed(message["id"])
