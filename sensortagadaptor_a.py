@@ -10,7 +10,6 @@ ModuleName = "SensorTag"
 EOF_MONITOR_INTERVAL = 1  # Interval over which to count EOFs from device (sec)
 MAX_EOF_COUNT = 2         # Max EOFs allowed in that interval
 INIT_TIMEOUT = 16         # Timeout when initialising SensorTag (sec)
-GATT_TIMEOUT = 60         # Timeout listening to SensorTag (sec)
 GATT_SLEEP_TIME = 2       # Time to sleep between killing one gatt process & starting another
 MAX_NOTIFY_INTERVAL = 2.5 #Above this value tag will be polled rather than asked to notify (sec)
 
@@ -68,6 +67,7 @@ class Adaptor(CbAdaptor):
         self.connected = False  # Indicates we are connected to SensorTag
         self.status = "ok"
         self.state = "stopped"
+        self.gattTimeout = 60   # How long to wait if not heard from tag
         self.badCount = 0       # Used to count errors on the BLE interface
         self.notifyApps = {"temperature": [],
                            "ir_temperature": [],
@@ -243,6 +243,13 @@ class Adaptor(CbAdaptor):
             if a not in self.processedApps:
                 found = False
         if found:
+            # Check required polling times and set timeout accordingly
+            minPollInterval = 1000
+            for a in self.pollApps:
+                if self.pollApps[a]:
+                    if self.pollInterval[a] < minPollInterval:
+                        minPollInterval = self.pollInterval[a]
+            self.gattTimeout = 2*minPollInterval
             self.setState("inUse")
 
     def writeTag(self, handle, cmd):
@@ -393,7 +400,7 @@ class Adaptor(CbAdaptor):
             if self.badCount > 7:
                 self.setState("error")
             if self.sim == 0:
-                index = self.gatt.expect(['handle.*', pexpect.TIMEOUT, pexpect.EOF], timeout=GATT_TIMEOUT)
+                index = self.gatt.expect(['handle.*', pexpect.TIMEOUT, pexpect.EOF], timeout=self.gattTimeout)
             else:
                 index = 0
             if index == 1:
