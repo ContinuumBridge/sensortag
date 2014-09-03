@@ -296,7 +296,7 @@ class Adaptor(CbAdaptor):
 
     def pollTag(self):
         for a in self.pollApps:
-            if self.pollApps[a]:
+            if self.pollApps[a] and a != "ir_temperature":
                 if time.time() > self.pollTime[a]:
                     reactor.callLater(0, self.switchSensorOn, a)
                     self.pollTime[a] = time.time() + self.pollInterval[a]
@@ -304,16 +304,18 @@ class Adaptor(CbAdaptor):
 
     def switchSensorOn(self, sensor):
         #logging.debug("%s %s %s swtichSensorOn: %s", ModuleName, self.id, self.friendly_name, sensor)
-        self.writeTagNoCheck(self.handles[sensor]["en"], self.cmd["on"])
-        self.writeTagNoCheck(self.handles[sensor]["notify"], self.cmd["notify"])
-        if sensor not in self.activePolls:
-            self.activePolls.append(sensor)
+        if sensor != "ir_temperature":
+            self.writeTagNoCheck(self.handles[sensor]["en"], self.cmd["on"])
+            self.writeTagNoCheck(self.handles[sensor]["notify"], self.cmd["notify"])
+            if sensor not in self.activePolls:
+                self.activePolls.append(sensor)
 
     def sensorRead(self, sensor):
         #logging.debug("%s %s %s sensorRead: %s", ModuleName, self.id, self.friendly_name, sensor)
         if sensor in self.activePolls:
             self.activePolls.remove(sensor)
-        if sensor in self.pollApps:
+        # ir_temperature comes from the temperature sensor
+        if sensor in self.pollApps and sensor != "ir_temperature":
             self.writeTagNoCheck(self.handles[sensor]["notify"], self.cmd["stop_notify"])
             self.writeTagNoCheck(self.handles[sensor]["en"], self.cmd["off"])
 
@@ -535,7 +537,7 @@ class Adaptor(CbAdaptor):
                             {"characteristic": "ir_temperature",
                              "interval": 1.0},
                             {"characteristic": "acceleration",
-                             "interval": 3.0},
+                             "interval": 1.0},
                             {"characteristic": "gyro",
                              "interval": 1.0},
                             {"characteristic": "magnetometer",
