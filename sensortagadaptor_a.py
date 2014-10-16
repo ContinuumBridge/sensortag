@@ -11,7 +11,7 @@ EOF_MONITOR_INTERVAL = 1  # Interval over which to count EOFs from device (sec)
 MAX_EOF_COUNT = 2         # Max EOFs allowed in that interval
 INIT_TIMEOUT = 16         # Timeout when initialising SensorTag (sec)
 GATT_SLEEP_TIME = 2       # Time to sleep between killing one gatt process & starting another
-MAX_NOTIFY_INTERVAL = 2.5 #Above this value tag will be polled rather than asked to notify (sec)
+MAX_NOTIFY_INTERVAL = 30  # Above this value tag will be polled rather than asked to notify (sec)
 
 import pexpect
 import sys
@@ -83,13 +83,13 @@ class Adaptor(CbAdaptor):
                            "magnetometer": [],
                            "humidity": [],
                            "buttons": []}
-        self.pollInterval = {"temperature": 1000,
-                             "ir_temperature": 1000,
-                             "acceleration": 1000,
-                             "gyro": 1000,
-                             "magnetometer": 1000,
-                             "humidity": 1000,
-                             "buttons": 1000}
+        self.pollInterval = {"temperature": 10000,
+                             "ir_temperature": 10000,
+                             "acceleration": 10000,
+                             "gyro": 10000,
+                             "magnetometer": 10000,
+                             "humidity": 10000,
+                             "buttons": 10000}
         self.pollTime =     {"temperature": 0,
                              "ir_temperature": 0,
                              "acceleration": 0,
@@ -243,13 +243,37 @@ class Adaptor(CbAdaptor):
             if a not in self.processedApps:
                 found = False
         if found:
+            thereAreNotifyApps = False
+            for a in self.notifyApps:
+                # Allow buttons to be the only notifying characteristic
+                if self.notifyApps[a] and a != "buttons":
+                    thereAreNotifyApps = True
             # Check required polling times and set timeout accordingly
-            minPollInterval = 1000
+            minPollInterval = 10000
             for a in self.pollApps:
                 if self.pollApps[a]:
-                    if self.pollInterval[a] < minPollInterval:
+                    if thereAreNotifyApps:
+                        for app in self.pollApps[a]:
+                            self.notifyApps[a].append(app)
+                        self.pollApps[a] = []
+                    elif self.pollInterval[a] < minPollInterval:
                         minPollInterval = self.pollInterval[a]
             self.gattTimeout = 2*minPollInterval
+            for a in self.notifyApps:
+                if a != "ir_temperature":
+                    if self.notifyApps[a]:
+                        if "period" in self.handles[a]:
+                            # Value to write is n * 10ms
+                            i = int(self.pollInterval[a] * 100)
+                            if i > 255:
+                                i = 255
+                            elif i < 10:
+                                i = 10
+                            self.handles[a]["period_value"] = ' ' + str(i)
+                            logging.debug("%s %s %s period value %s: %s", ModuleName, self.id, self.friendly_name, a, self.handles[a]["period_value"])
+            logging.info("%s %s %s notifyApps: %s", ModuleName, self.id, self.friendly_name, str(self.notifyApps))
+            logging.info("%s %s %s pollApps: %s", ModuleName, self.id, self.friendly_name, str(self.pollApps))
+            logging.info("%s %s %s pollIntervals: %s", ModuleName, self.id, self.friendly_name, str(self.pollInterval))
             self.setState("inUse")
 
     def writeTag(self, handle, cmd):
@@ -563,13 +587,13 @@ class Adaptor(CbAdaptor):
             if f["interval"] < MAX_NOTIFY_INTERVAL:
                 if message["id"] not in self.notifyApps[f["characteristic"]]:
                     self.notifyApps[f["characteristic"]].append(message["id"])
+                    if f["interval"] < self.pollInterval[f["characteristic"]]:
+                        self.pollInterval[f["characteristic"]] = f["interval"]
             else:
                 if message["id"] not in self.pollApps[f["characteristic"]]:
                     self.pollApps[f["characteristic"]].append(message["id"])
                     if f["interval"] < self.pollInterval[f["characteristic"]]:
                         self.pollInterval[f["characteristic"]] = f["interval"]
-        logging.info("%s %s %s notifyApps: %s", ModuleName, self.id, self.friendly_name, str(self.notifyApps))
-        logging.info("%s %s %s pollApps: %s", ModuleName, self.id, self.friendly_name, str(self.pollApps))
         self.checkAllProcessed(message["id"])
 
     def onConfigureMessage(self, config):
