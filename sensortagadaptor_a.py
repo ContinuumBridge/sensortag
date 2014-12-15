@@ -75,6 +75,7 @@ class Adaptor(CbAdaptor):
                            "gyro": [],
                            "magnetometer": [],
                            "humidity": [],
+                           "connected": [],
                            "buttons": []}
         self.pollApps =   {"temperature": [],
                            "ir_temperature": [],
@@ -82,6 +83,7 @@ class Adaptor(CbAdaptor):
                            "gyro": [],
                            "magnetometer": [],
                            "humidity": [],
+                           "connected": [],
                            "buttons": []}
         self.pollInterval = {"temperature": 10000,
                              "ir_temperature": 10000,
@@ -89,6 +91,7 @@ class Adaptor(CbAdaptor):
                              "gyro": 10000,
                              "magnetometer": 10000,
                              "humidity": 10000,
+                             "connected": 10000,
                              "buttons": 10000}
         self.pollTime =     {"temperature": 0,
                              "ir_temperature": 0,
@@ -96,6 +99,7 @@ class Adaptor(CbAdaptor):
                              "gyro": 0,
                              "magnetometer": 0,
                              "humidity": 0,
+                             "connected": 0,
                              "buttons": 0}
         self.activePolls = []
         self.lastEOFTime = time.time()
@@ -221,6 +225,8 @@ class Adaptor(CbAdaptor):
         except:
             logging.error("%s %s %s Dead!", ModuleName, self.id, self.friendly_name)
             self.connected = False
+            logging.debug("%s %s %s initSensorTag 1, connected: %s", ModuleName, self.id, self.friendly_name, self.connected)
+            self.sendcharacteristic("connected", self.connected, time.time())
             return "noConnect"
         self.gatt.expect('\[LE\]>')
         self.gatt.sendline('connect')
@@ -228,12 +234,16 @@ class Adaptor(CbAdaptor):
         if index == 1 or index == 2:
             # index 2 is not actually a timeout, but something has gone wrong
             self.connected = False
+            logging.debug("%s %s %s initSensorTag 2, connected: %s", ModuleName, self.id, self.friendly_name, self.connected)
+            self.sendcharacteristic("connected", self.connected, time.time())
             self.gatt.kill(9)
             # Wait a second just to give SensorTag time to "recover"
             time.sleep(1)
             return "timeout"
         else:
             self.connected = True
+            logging.debug("%s %s %s initSensorTag 3, connected: %s", ModuleName, self.id, self.friendly_name, self.connected)
+            self.sendcharacteristic("connected", self.connected, time.time())
             return "ok"
 
     def checkAllProcessed(self, appID):
@@ -246,7 +256,7 @@ class Adaptor(CbAdaptor):
             thereAreNotifyApps = False
             for a in self.notifyApps:
                 # Allow buttons to be the only notifying characteristic
-                if self.notifyApps[a] and a != "buttons":
+                if self.notifyApps[a] and a != "buttons" and a != "connected":
                     thereAreNotifyApps = True
             # Check required polling times and set timeout accordingly
             minPollInterval = 10000
@@ -258,9 +268,10 @@ class Adaptor(CbAdaptor):
                         self.pollApps[a] = []
                     elif self.pollInterval[a] < minPollInterval:
                         minPollInterval = self.pollInterval[a]
-            self.gattTimeout = 2*minPollInterval
+                        self.gattTimeout = 2*minPollInterval + 1
+            logging.debug("%s %s %s gattTimeout: %s", ModuleName, self.id, self.friendly_name, self.gattTimeout)
             for a in self.notifyApps:
-                if a != "ir_temperature":
+                if a != "ir_temperature" and a != "connected":
                     if self.notifyApps[a]:
                         if "period" in self.handles[a]:
                             # Value to write is n * 10ms
@@ -274,6 +285,8 @@ class Adaptor(CbAdaptor):
             logging.info("%s %s %s notifyApps: %s", ModuleName, self.id, self.friendly_name, str(self.notifyApps))
             logging.info("%s %s %s pollApps: %s", ModuleName, self.id, self.friendly_name, str(self.pollApps))
             logging.info("%s %s %s pollIntervals: %s", ModuleName, self.id, self.friendly_name, str(self.pollInterval))
+            logging.debug("%s %s %s connected: %s", ModuleName, self.id, self.friendly_name, self.connected)
+            self.sendcharacteristic("connected", self.connected, time.time())
             self.setState("inUse")
 
     def writeTag(self, handle, cmd):
@@ -305,7 +318,7 @@ class Adaptor(CbAdaptor):
         """
         self.tagOK = "ok"
         for a in self.notifyApps:
-            if a != "ir_temperature":
+            if a != "ir_temperature" and a != "connected":
                 if self.notifyApps[a]:
                     if "en" in self.handles[a]:
                         self.writeTag(self.handles[a]["en"], self.cmd["on"])
@@ -320,7 +333,7 @@ class Adaptor(CbAdaptor):
 
     def pollTag(self):
         for a in self.pollApps:
-            if self.pollApps[a] and a != "ir_temperature":
+            if self.pollApps[a] and (a != "ir_temperature" or a != "connected"):
                 if time.time() > self.pollTime[a]:
                     reactor.callLater(0, self.switchSensorOn, a)
                     self.pollTime[a] = time.time() + self.pollInterval[a]
@@ -354,6 +367,8 @@ class Adaptor(CbAdaptor):
         elif self.sim != 0:
             # In simulation mode (no real devices) just pretend to connect
             self.connected = True
+            logging.debug("%s %s %s connectSensorTag, conencted: %s", ModuleName, self.id, self.friendly_name, self.connected)
+            self.sendcharacteristic("connected", self.connected, time.time())
         while self.connected == False and not self.doStop and self.sim == 0:
             tagStatus = self.initSensorTag()    
             if tagStatus != "ok":
@@ -440,6 +455,8 @@ class Adaptor(CbAdaptor):
                     logging.warning("%s Could not reconnect nicely. Killing", ModuleName)
                     self.badCount += 1
                     self.connected = False
+                    logging.debug("%s %s %s sendValues, connected: %s", ModuleName, self.id, self.friendly_name, self.connected)
+                    self.sendcharacteristic("connected", self.connected, time.time())
                 else:
                     logging.warning("%s Successful reconnection without kill", ModuleName)
                     status = self.switchSensors()
@@ -568,6 +585,8 @@ class Adaptor(CbAdaptor):
                              "interval": 1.0},
                             {"characteristic": "humidity",
                              "interval": 1.0},
+                            {"characteristic": "connected",
+                             "interval": 0},
                             {"characteristic": "buttons",
                              "interval": 0}],
                 "content": "service"}

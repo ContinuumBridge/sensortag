@@ -1,0 +1,11 @@
+{
+    "exe": "sensortagadaptor.py", 
+    "protocol": "ble", 
+    "name": "Continuum", 
+    "device_resource": "/api/bridge/v1/device/7/", 
+    "url": "https://github.com/ContinuumBridge/sensortag/archive/v1.0.0.tar.gz", 
+    "version": "1.0.0", 
+    "provider": "ContinuumBridge", 
+    "adaptor_resource": "/api/bridge/v1/adaptor/1/", 
+    "description": "TI Sensortag with ContinuumBridge software"
+}
